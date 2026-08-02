@@ -4841,8 +4841,9 @@ func TestBuildSPADocument_PublicAccessAndPageFound_InjectsSSRContentAndMeta(t *t
 				t.Fatalf("expected route path %q, got %q", "docs/intro", routePath)
 			}
 			return &tree.Page{
-				PageNode: &tree.PageNode{Title: "Intro", Slug: "intro", Kind: tree.NodeKindPage},
-				Content:  "# Intro\n\nBody text.",
+				PageNode:   &tree.PageNode{Title: "Intro", Slug: "intro", Kind: tree.NodeKindPage},
+				Content:    "# Intro\n\nBody text.",
+				RawContent: "---\ndescription: Hand-written summary.\n---\n\n# Intro\n\nBody text.",
 			}, nil
 		},
 	}
@@ -4865,6 +4866,10 @@ func TestBuildSPADocument_PublicAccessAndPageFound_InjectsSSRContentAndMeta(t *t
 	if !strings.Contains(doc, `og:title" content="Intro"`) {
 		t.Fatalf("expected og:title meta tag, got %q", doc)
 	}
+	// Read out of the raw file's frontmatter, not excerpted from the body.
+	if !strings.Contains(doc, `<meta name="description" content="Hand-written summary.">`) {
+		t.Fatalf("expected frontmatter description, got %q", doc)
+	}
 }
 
 // homeTreeFixture returns a tree whose first child is the "home" page, so
@@ -4886,9 +4891,11 @@ func homeFrontendCfg(t *testing.T, wantRoutePath string) httpinternal.FrontendCo
 			if routePath != wantRoutePath {
 				t.Fatalf("expected route path %q, got %q", wantRoutePath, routePath)
 			}
+			// A file with no frontmatter: Content and RawContent match.
 			return &tree.Page{
-				PageNode: &tree.PageNode{Title: "Home", Slug: "home", Kind: tree.NodeKindPage},
-				Content:  "# Home\n\nWelcome text.",
+				PageNode:   &tree.PageNode{Title: "Home", Slug: "home", Kind: tree.NodeKindPage},
+				Content:    "# Home\n\nWelcome text.",
+				RawContent: "# Home\n\nWelcome text.",
 			}, nil
 		},
 	}

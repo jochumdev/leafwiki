@@ -388,7 +388,9 @@ func BuildSPADocument(rawHTML string, c *gin.Context, path string, opts RouterOp
 						canonicalURL = publicOrigin(c, opts)
 					}
 					canonicalURL += opts.BasePath + canonicalPath
-					meta = seo.BuildPageMeta(siteName, page.Title, page.Content, canonicalURL)
+					// RawContent, not Content: the meta description can be set
+					// in the page's frontmatter, which Content has stripped.
+					meta = seo.BuildPageMeta(siteName, page.Title, page.RawContent, canonicalURL)
 					ssrContent = rendered
 					pageHead = meta.HeadTags()
 				} else {
