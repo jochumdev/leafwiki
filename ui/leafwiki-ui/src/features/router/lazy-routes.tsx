@@ -15,7 +15,7 @@ export const MaintenanceSettings = lazy(
 )
 export const PageHistoryPage = lazy(() => import('../page/PageHistoryPage'))
 export const PermalinkRedirect = lazy(() => import('../page/PermalinkRedirect'))
-export const RootRedirect = lazy(() => import('../page/RootRedirect'))
+export const RootPage = lazy(() => import('../page/RootPage'))
 export const SnapshotSettings = lazy(
   () => import('../snapshot/SnapshotSettings'),
 )
