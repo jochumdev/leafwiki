@@ -7,6 +7,13 @@
     <meta name="base-path" content="{{__BASE_PATH__}}" />
     <title>{{__PAGE_TITLE__}}</title>
     {{__PAGE_HEAD__}}
+    <noscript>
+      <style>
+        #root {
+          opacity: 1;
+        }
+      </style>
+    </noscript>
   </head>
   <body>
     <div id="root">{{__SSR_CONTENT__}}</div>

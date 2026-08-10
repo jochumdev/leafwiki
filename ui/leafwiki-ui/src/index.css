@@ -265,6 +265,25 @@
   [role='button']:not(:disabled) {
     cursor: pointer;
   }
+
+  /* The server renders the page's Markdown into #root so crawlers and LLM
+     agents get content without executing JavaScript. React throws that markup
+     away on mount, so hide it until then rather than flashing unstyled server
+     HTML past the reader. App adds .mounted (see App.tsx). */
+  #root {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  #root.mounted {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #root {
+      transition: none;
+    }
+  }
 }
 
 .cm-tooltip-autocomplete {
