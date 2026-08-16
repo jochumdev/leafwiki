@@ -4591,6 +4591,74 @@ func TestFaviconRoute_DisablesClientCache(t *testing.T) {
 	}
 }
 
+// Link checkers, uptime monitors and preview bots probe with HEAD; every SPA
+// route used to answer them with 404.
+func TestSPARoute_HeadRequest_MatchesGet(t *testing.T) {
+	w := createWikiTestInstance(t)
+	defer test_utils.WrapCloseWithErrorCheck(w.Close, t)
+
+	EmbedFrontendOrig := httpinternal.EmbedFrontend
+	httpinternal.EmbedFrontend = "true"
+	defer func() {
+		httpinternal.EmbedFrontend = EmbedFrontendOrig
+	}()
+
+	router := httpinternal.NewRouter(w.Registrars(), w.FrontendConfig(), httpinternal.RouterOptions{
+		PublicAccess:            true,
+		AllowInsecure:           true,
+		AccessTokenTimeout:      15 * time.Minute,
+		RefreshTokenTimeout:     7 * 24 * time.Hour,
+		MaxAssetUploadSizeBytes: assets.DefaultMaxUploadSizeBytes,
+	})
+
+	// Asserted as "HEAD matches GET" rather than a fixed 200: dist/index.html
+	// is a build artifact, so a clean checkout serves 404 for both. Either way
+	// HEAD must take the SPA branch instead of the "Page not found" fallback.
+	for _, path := range []string{"/", "/some/deep/page"} {
+		get := httptest.NewRecorder()
+		router.ServeHTTP(get, httptest.NewRequest(http.MethodGet, path, nil))
+
+		head := httptest.NewRecorder()
+		router.ServeHTTP(head, httptest.NewRequest(http.MethodHead, path, nil))
+
+		if head.Code != get.Code {
+			t.Fatalf("HEAD %s: expected status %d as for GET, got %d", path, get.Code, head.Code)
+		}
+		if got, want := head.Header().Get("Content-Type"), get.Header().Get("Content-Type"); got != want {
+			t.Fatalf("HEAD %s: expected content type %q as for GET, got %q", path, want, got)
+		}
+		if got, want := head.Body.String(), get.Body.String(); got != want {
+			t.Fatalf("HEAD %s: expected same payload as GET, got %q want %q", path, got, want)
+		}
+	}
+}
+
+func TestSPARoute_UnsupportedMethod_StillNotFound(t *testing.T) {
+	w := createWikiTestInstance(t)
+	defer test_utils.WrapCloseWithErrorCheck(w.Close, t)
+
+	EmbedFrontendOrig := httpinternal.EmbedFrontend
+	httpinternal.EmbedFrontend = "true"
+	defer func() {
+		httpinternal.EmbedFrontend = EmbedFrontendOrig
+	}()
+
+	router := httpinternal.NewRouter(w.Registrars(), w.FrontendConfig(), httpinternal.RouterOptions{
+		PublicAccess:            true,
+		AllowInsecure:           true,
+		AccessTokenTimeout:      15 * time.Minute,
+		RefreshTokenTimeout:     7 * 24 * time.Hour,
+		MaxAssetUploadSizeBytes: assets.DefaultMaxUploadSizeBytes,
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/some/deep/page", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for DELETE on an SPA route, got %d", rec.Code)
+	}
+}
+
 func TestFaviconICORoute_ServesCustomBrandingFavicon(t *testing.T) {
 	w := createWikiTestInstance(t)
 	defer test_utils.WrapCloseWithErrorCheck(w.Close, t)
@@ -4642,5 +4710,295 @@ func TestBuildCustomStylesheetTag_WhitespacePath(t *testing.T) {
 	tag := httpinternal.BuildCustomStylesheetTag("/wiki", "   ")
 	if tag != "" {
 		t.Fatalf("expected empty tag for whitespace path, got %q", tag)
+	}
+}
+
+func TestRobotsTxt_PrivateWiki_DisallowsAll(t *testing.T) {
+	w := createWikiTestInstance(t)
+	defer test_utils.WrapCloseWithErrorCheck(w.Close, t)
+
+	router := createRouterTestInstance(w, t)
+
+	req := httptest.NewRequest(http.MethodGet, "/robots.txt", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Body.String(); !strings.Contains(got, "Disallow: /") {
+		t.Fatalf("expected private wiki to disallow all crawling, got %q", got)
+	}
+}
+
+func TestRobotsTxt_PublicWiki_AllowsAllAndReferencesSitemap(t *testing.T) {
+	w := createWikiTestInstance(t)
+	defer test_utils.WrapCloseWithErrorCheck(w.Close, t)
+
+	router := httpinternal.NewRouter(w.Registrars(), w.FrontendConfig(), httpinternal.RouterOptions{
+		PublicAccess:            true,
+		AllowInsecure:           true,
+		AccessTokenTimeout:      15 * time.Minute,
+		RefreshTokenTimeout:     7 * 24 * time.Hour,
+		MaxAssetUploadSizeBytes: assets.DefaultMaxUploadSizeBytes,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/robots.txt", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "Disallow: /") {
+		t.Fatalf("expected public wiki to allow crawling, got %q", body)
+	}
+	if !strings.Contains(body, "Sitemap: ") || !strings.Contains(body, "/sitemap.xml") {
+		t.Fatalf("expected robots.txt to reference sitemap.xml, got %q", body)
+	}
+}
+
+func TestSitemapXML_PrivateWiki_NotFound(t *testing.T) {
+	w := createWikiTestInstance(t)
+	defer test_utils.WrapCloseWithErrorCheck(w.Close, t)
+
+	router := createRouterTestInstance(w, t)
+
+	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for private wiki, got %d", rec.Code)
+	}
+}
+
+func TestSitemapXML_PublicWiki_ListsPages(t *testing.T) {
+	w := createWikiTestInstance(t)
+	defer test_utils.WrapCloseWithErrorCheck(w.Close, t)
+
+	router := httpinternal.NewRouter(w.Registrars(), w.FrontendConfig(), httpinternal.RouterOptions{
+		PublicAccess:            true,
+		AllowInsecure:           true,
+		AccessTokenTimeout:      15 * time.Minute,
+		RefreshTokenTimeout:     7 * 24 * time.Hour,
+		MaxAssetUploadSizeBytes: assets.DefaultMaxUploadSizeBytes,
+		PublicBaseURL:           "https://wiki.example.com",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/sitemap.xml", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d - %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "xml") {
+		t.Fatalf("expected xml content type, got %q", ct)
+	}
+	body := rec.Body.String()
+	// The welcome page is the tree's first child, so it is the home page and is
+	// listed at the bare root URL - the same URL its canonical tag points at.
+	if !strings.Contains(body, "<loc>https://wiki.example.com/</loc>") {
+		t.Fatalf("expected sitemap to list the welcome page at the root URL, got %q", body)
+	}
+	if strings.Contains(body, "<loc>https://wiki.example.com/welcome-to-leafwiki</loc>") {
+		t.Fatalf("expected home page not to be listed under its own path too, got %q", body)
+	}
+}
+
+const testShellHTML = `<!doctype html><html><head><title>{{__PAGE_TITLE__}}</title>
+{{__PAGE_HEAD__}}
+</head><body><div id="root">{{__SSR_CONTENT__}}</div></body></html>`
+
+func TestBuildSPADocument_NoPageMatch_FallsBackToSiteNameTitle(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/does/not/exist", nil)
+
+	frontendCfg := httpinternal.FrontendConfig{
+		GetSiteName: func() string { return "MyWiki" },
+	}
+
+	doc := string(httpinternal.BuildSPADocument(testShellHTML, c, "/does/not/exist", httpinternal.RouterOptions{}, frontendCfg, ""))
+
+	if !strings.Contains(doc, "<title>MyWiki</title>") {
+		t.Fatalf("expected site name as title, got %q", doc)
+	}
+	if !strings.Contains(doc, `<div id="root"></div>`) {
+		t.Fatalf("expected empty root div when no page matched, got %q", doc)
+	}
+}
+
+func TestBuildSPADocument_PublicAccessAndPageFound_InjectsSSRContentAndMeta(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/docs/intro", nil)
+
+	frontendCfg := httpinternal.FrontendConfig{
+		GetSiteName: func() string { return "MyWiki" },
+		FindPageByRoutePath: func(routePath string) (*tree.Page, error) {
+			if routePath != "docs/intro" {
+				t.Fatalf("expected route path %q, got %q", "docs/intro", routePath)
+			}
+			return &tree.Page{
+				PageNode:   &tree.PageNode{Title: "Intro", Slug: "intro", Kind: tree.NodeKindPage},
+				Content:    "# Intro\n\nBody text.",
+				RawContent: "---\ndescription: Hand-written summary.\n---\n\n# Intro\n\nBody text.",
+			}, nil
+		},
+	}
+	opts := httpinternal.RouterOptions{PublicAccess: true, PublicBaseURL: "https://wiki.example.com"}
+
+	doc := string(httpinternal.BuildSPADocument(testShellHTML, c, "/docs/intro", opts, frontendCfg, ""))
+
+	if !strings.Contains(doc, "<title>Intro · MyWiki</title>") {
+		t.Fatalf("expected page title combined with site name, got %q", doc)
+	}
+	if !strings.Contains(doc, "Body text.") {
+		t.Fatalf("expected rendered markdown body inside shell, got %q", doc)
+	}
+	if !strings.Contains(doc, `<div id="root"><h1`) {
+		t.Fatalf("expected SSR content injected inside #root, got %q", doc)
+	}
+	if !strings.Contains(doc, `<link rel="canonical" href="https://wiki.example.com/docs/intro">`) {
+		t.Fatalf("expected canonical link for matched page, got %q", doc)
+	}
+	if !strings.Contains(doc, `og:title" content="Intro"`) {
+		t.Fatalf("expected og:title meta tag, got %q", doc)
+	}
+	// Read out of the raw file's frontmatter, not excerpted from the body.
+	if !strings.Contains(doc, `<meta name="description" content="Hand-written summary.">`) {
+		t.Fatalf("expected frontmatter description, got %q", doc)
+	}
+}
+
+// homeTreeFixture returns a tree whose first child is the "home" page, so
+// seo.HomeRoutePath resolves the site root to it.
+func homeTreeFixture() *tree.PageNode {
+	root := &tree.PageNode{ID: "root", Slug: "root", Kind: tree.NodeKindSection}
+	home := &tree.PageNode{ID: "home", Slug: "home", Kind: tree.NodeKindPage, Parent: root}
+	other := &tree.PageNode{ID: "other", Slug: "other", Kind: tree.NodeKindPage, Parent: root}
+	root.Children = []*tree.PageNode{home, other}
+	return root
+}
+
+func homeFrontendCfg(t *testing.T, wantRoutePath string) httpinternal.FrontendConfig {
+	t.Helper()
+	return httpinternal.FrontendConfig{
+		GetSiteName: func() string { return "MyWiki" },
+		GetTree:     homeTreeFixture,
+		FindPageByRoutePath: func(routePath string) (*tree.Page, error) {
+			if routePath != wantRoutePath {
+				t.Fatalf("expected route path %q, got %q", wantRoutePath, routePath)
+			}
+			// A file with no frontmatter: Content and RawContent match.
+			return &tree.Page{
+				PageNode:   &tree.PageNode{Title: "Home", Slug: "home", Kind: tree.NodeKindPage},
+				Content:    "# Home\n\nWelcome text.",
+				RawContent: "# Home\n\nWelcome text.",
+			}, nil
+		},
+	}
+}
+
+// The root must serve the home page's content rather than an empty shell:
+// it is the URL crawlers rank, and an empty root gets dropped in favour of the
+// page's own path.
+func TestBuildSPADocument_Root_ServesHomePageWithRootCanonical(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+	opts := httpinternal.RouterOptions{PublicAccess: true, PublicBaseURL: "https://wiki.example.com"}
+	doc := string(httpinternal.BuildSPADocument(testShellHTML, c, "/", opts, homeFrontendCfg(t, "home"), ""))
+
+	if !strings.Contains(doc, "Welcome text.") {
+		t.Fatalf("expected home page markdown rendered at the root, got %q", doc)
+	}
+	if !strings.Contains(doc, "<title>Home · MyWiki</title>") {
+		t.Fatalf("expected home page title at the root, got %q", doc)
+	}
+	if !strings.Contains(doc, `<link rel="canonical" href="https://wiki.example.com/">`) {
+		t.Fatalf("expected root canonical, got %q", doc)
+	}
+}
+
+// The home page is reachable under its own path too; that URL must point back
+// at the root so the two never compete for indexing.
+func TestBuildSPADocument_HomePageOwnPath_CanonicalizesToRoot(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/home", nil)
+
+	opts := httpinternal.RouterOptions{PublicAccess: true, PublicBaseURL: "https://wiki.example.com"}
+	doc := string(httpinternal.BuildSPADocument(testShellHTML, c, "/home", opts, homeFrontendCfg(t, "home"), ""))
+
+	if !strings.Contains(doc, `<link rel="canonical" href="https://wiki.example.com/">`) {
+		t.Fatalf("expected home page to canonicalize to the root, got %q", doc)
+	}
+	if strings.Contains(doc, `href="https://wiki.example.com/home"`) {
+		t.Fatalf("expected no self-canonical on the home page path, got %q", doc)
+	}
+}
+
+func TestBuildSPADocument_NonHomePage_KeepsSelfCanonical(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/other", nil)
+
+	opts := httpinternal.RouterOptions{PublicAccess: true, PublicBaseURL: "https://wiki.example.com"}
+	doc := string(httpinternal.BuildSPADocument(testShellHTML, c, "/other", opts, homeFrontendCfg(t, "other"), ""))
+
+	if !strings.Contains(doc, `<link rel="canonical" href="https://wiki.example.com/other">`) {
+		t.Fatalf("expected self-canonical for a non-home page, got %q", doc)
+	}
+}
+
+// Without a tree the root has no resolvable page and must stay an empty shell
+// rather than guessing at content.
+func TestBuildSPADocument_Root_NoTree_StaysEmpty(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+	frontendCfg := httpinternal.FrontendConfig{
+		GetSiteName: func() string { return "MyWiki" },
+		FindPageByRoutePath: func(routePath string) (*tree.Page, error) {
+			t.Fatalf("did not expect a page lookup without a tree, got %q", routePath)
+			return nil, nil
+		},
+	}
+	opts := httpinternal.RouterOptions{PublicAccess: true, PublicBaseURL: "https://wiki.example.com"}
+
+	doc := string(httpinternal.BuildSPADocument(testShellHTML, c, "/", opts, frontendCfg, ""))
+
+	if !strings.Contains(doc, `<div id="root"></div>`) {
+		t.Fatalf("expected empty root div without a tree, got %q", doc)
+	}
+}
+
+func TestBuildSPADocument_PrivateWiki_DoesNotInjectSSRContentEvenIfPageMatches(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/docs/intro", nil)
+
+	frontendCfg := httpinternal.FrontendConfig{
+		GetSiteName: func() string { return "MyWiki" },
+		FindPageByRoutePath: func(routePath string) (*tree.Page, error) {
+			return &tree.Page{
+				PageNode: &tree.PageNode{Title: "Intro", Slug: "intro", Kind: tree.NodeKindPage},
+				Content:  "# Intro\n\nBody text.",
+			}, nil
+		},
+	}
+	// PublicAccess is false: SSR must never render page content to
+	// unauthenticated requests even though a page was found.
+	opts := httpinternal.RouterOptions{PublicAccess: false}
+
+	doc := string(httpinternal.BuildSPADocument(testShellHTML, c, "/docs/intro", opts, frontendCfg, ""))
+
+	if strings.Contains(doc, "Body text.") {
+		t.Fatalf("expected no SSR content for a private wiki, got %q", doc)
+	}
+	if !strings.Contains(doc, `<div id="root"></div>`) {
+		t.Fatalf("expected empty root div for a private wiki, got %q", doc)
+	}
+	if !strings.Contains(doc, "<title>MyWiki</title>") {
+		t.Fatalf("expected site name title (not page title) for a private wiki, got %q", doc)
 	}
 }

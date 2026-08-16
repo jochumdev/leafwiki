@@ -10,7 +10,7 @@ import {
   PageHistoryPage,
   PageViewer,
   PermalinkRedirect,
-  RootRedirect,
+  RootPage,
   SnapshotSettings,
   UserManagement,
 } from './lazy-routes'
@@ -43,11 +43,11 @@ export const createLeafWikiRouter = (
         path: '/',
         element: isReadOnlyViewer ? (
           <ReadOnlyWrapper>
-            <RootRedirect />
+            <RootPage />
           </ReadOnlyWrapper>
         ) : (
           <AuthWrapper>
-            <RootRedirect />
+            <RootPage />
           </AuthWrapper>
         ),
       },

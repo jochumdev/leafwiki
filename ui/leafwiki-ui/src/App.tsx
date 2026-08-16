@@ -38,6 +38,13 @@ function App() {
   const clearFavorites = useFavoritesStore((s) => s.clearFavorites)
 
   useApplyDesignMode()
+
+  // React has replaced the server-rendered markup by now, so reveal #root
+  // (see the fade in index.css).
+  useEffect(() => {
+    document.getElementById('root')?.classList.add('mounted')
+  }, [])
+
   useEffect(() => {
     loadConfig()
   }, [loadConfig])
